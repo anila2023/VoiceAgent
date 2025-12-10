@@ -16,7 +16,23 @@
 
 from google.adk.agents import LlmAgent
 from ..tools.search_tools import search_tool
-# from ..tools.vector_search_tools import enhanced_search_tool, index_documents_tool
+try:
+    from ..tools.faiss_search_tools import faiss_search_documents, faiss_index_documents
+    VECTOR_SEARCH_AVAILABLE = True
+    VECTOR_TYPE = "FAISS"
+except ImportError as e:
+    try:
+        from ..tools.vector_search_tools import enhanced_search_tool, index_documents_tool
+        VECTOR_SEARCH_AVAILABLE = True
+        VECTOR_TYPE = "ChromaDB"
+        faiss_search_documents = enhanced_search_tool
+        faiss_index_documents = index_documents_tool
+    except ImportError as e2:
+        print(f"No vector search available: FAISS={e}, ChromaDB={e2}")
+        faiss_search_documents = None
+        faiss_index_documents = None
+        VECTOR_SEARCH_AVAILABLE = False
+        VECTOR_TYPE = None
 
 
 def create_search_assistant_agent(llm=None) -> LlmAgent:
@@ -26,13 +42,30 @@ def create_search_assistant_agent(llm=None) -> LlmAgent:
     This agent is responsible for answering questions based on the content
     of the indexed insurance policies.
     """
-    search_assistant_prompt = """
-    You are an Enhanced Search Assistant for insurance policies with access to both traditional and vector-based semantic search.
-
+    # Determine available tools based on imports
+    if VECTOR_SEARCH_AVAILABLE:
+        tools_description = f"""
     **Your Tools:**
     1. `search_documents`: Traditional keyword search through indexed policies
-    2. `enhanced_search_documents`: Advanced semantic search using vector database
-    3. `index_policy_documents`: Index new policy documents into vector database
+    2. `faiss_search_documents`: Advanced semantic search using {VECTOR_TYPE} vector database
+    3. `faiss_index_documents`: Index new policy documents into vector database
+    
+    **Search Strategy:**
+    1. **For specific questions** (claims, contact, coverage): Try `faiss_search_documents` first for better semantic understanding
+    2. **If vector search fails or limited results**: Fall back to `search_documents`  
+    3. **For document indexing requests**: Use `faiss_index_documents`"""
+    else:
+        tools_description = """
+    **Your Tool:**
+    1. `search_documents`: Enhanced keyword search through indexed policies (vector search unavailable)
+    
+    **Search Strategy:**
+    1. Use `search_documents` for all queries with enhanced keyword matching"""
+    
+    search_assistant_prompt = f"""
+    You are an Enhanced Search Assistant for insurance policies with access to search capabilities.
+    
+    {tools_description}
 
     **Search Strategy:**
     1. **For specific questions** (claims, contact, coverage): Use `enhanced_search_documents` first for better semantic understanding
@@ -45,37 +78,45 @@ def create_search_assistant_agent(llm=None) -> LlmAgent:
     2. **Try vector search first** for better semantic matching
     3. **NEVER answer from your own knowledge** - only use tool results
     4. **If no information found**: "I could not find information about that in the available insurance policies."
-    5. **Extract and summarize** relevant information - don't return raw chunks
-    6. **Always cite sources** from the tool results
+    5. **Extract and summarize** relevant information from tool results
+    6. **Present information naturally** without mentioning sources or documents
     
     **Response Format:**
-    - For successful search: Provide a CLEAR, FOCUSED answer that directly addresses the question
+    - Provide CLEAR, FOCUSED answers that directly address the question
     - Include specific details like phone numbers, procedures, coverage details
-    - End with: "Source: [policy name]"
-    - Keep responses under 300 words unless more detail is specifically requested
+    - Present information as direct knowledge
+    - Keep responses under 300 words unless more detail is requested
     
     **Special Handling:**
-    - **Contact queries**: Look for phone numbers, addresses, contact procedures
-    - **Claims queries**: Focus on step-by-step procedures, timelines, requirements
+    - **Contact queries**: Provide phone numbers and contact procedures clearly
+    - **Claims queries**: Give step-by-step procedures, timelines, requirements
     - **Coverage queries**: Explain what is/isn't covered with specific examples
     
     **Example Interaction:**
     User: "How do I contact them for a claim?"
-    You: [Use enhanced_search_documents with query "contact claim phone number"]
+    You: [Use search tools to find contact information]
     Tool result: Contains "contact us at 0345 604 6473 as soon as possible"
-    Your response: "To make a claim, contact Halifax at 0345 604 6473 as soon as possible. You should call them immediately after the incident occurs. Source: Halifax Home Insurance Policy"
+    Your response: "To make a claim, contact us at 0345 604 6473 as soon as possible. You should call immediately after the incident occurs."
     
     **Quality Guidelines:**
     - Be specific and actionable in your responses
-    - Include all relevant details (numbers, timeframes, requirements)
+    - Include all relevant details (numbers, timeframes, requirements)  
     - Use clear, simple language
     - Structure information logically
-    - Prioritize the most important information first
+    - Present information confidently without referencing sources
     """
+    # Determine tools based on availability
+    tools = [search_tool]
+    if VECTOR_SEARCH_AVAILABLE:
+        tools.extend([faiss_search_documents, faiss_index_documents])
+        description = f"Enhanced search agent with {VECTOR_TYPE} vector database and traditional search capabilities."
+    else:
+        description = "Enhanced search agent with improved contact and claims search."
+    
     return LlmAgent(
         name="SearchAssistantAgent",
         model="gemini-2.0-flash-exp",
         instruction=search_assistant_prompt,
-        description="Enhanced search agent with improved contact and claims search.",
-        tools=[search_tool],  # enhanced_search_tool, index_documents_tool],
+        description=description,
+        tools=tools,
     )

@@ -124,21 +124,50 @@ class RAGOrchestrator(BaseAgent):
         logger.info(f"[{self.name}] Orchestration complete")
 
     @override
-    async def _run_live_impl(
-        self, ctx: InvocationContext
-    ) -> AsyncGenerator[Event, None]:
+    async def _run_live_impl(self, ctx: ConversationContext) -> AsyncGenerator[ConversationEvent, None]:
         """
         Orchestration logic for live/voice mode.
-
-        In live mode, route to voice assistant for speech-to-text bridge functionality.
+        
+        Keep the connection alive and route to search assistant in live mode.
+        Falls back to regular mode if Live API connection fails.
         """
-        logger.info(f"[{self.name}] Starting LIVE orchestration (voice mode)")
+        logger.info(f"[{self.name}] Starting LIVE orchestration (speech-to-text mode)")
+        
+        try:
+            # Use search assistant in live mode to maintain WebSocket connection
+            logger.info(f"[{self.name}] → Using Search Assistant in LIVE mode for voice input")
+            async for event in self.search_assistant.run_live(ctx):
+                logger.info(f"[{self.name}] Live event from SearchAssistant (voice input)")
+                yield event
 
-        # In live mode, use voice assistant as bridge to search functionality
-        logger.info(f"[{self.name}] → Running Voice Assistant in LIVE mode (bridge to search)")
-        async for event in self.voice_assistant.run_live(ctx):
-            logger.info(f"[{self.name}] Live event from VoiceAssistant")
-            yield event
-
-        logger.info(f"[{self.name}] Live orchestration complete")
+            logger.info(f"[{self.name}] Live orchestration complete")
+            
+        except Exception as e:
+            logger.warning(f"[{self.name}] Live API connection failed: {str(e)}")
+            logger.info(f"[{self.name}] → Falling back to regular mode for voice input")
+            
+            # Import necessary classes for creating fallback response
+            from google.adk.core import ConversationEvent
+            
+            # Send error message to user
+            yield ConversationEvent.create(
+                type="text",
+                text="Voice mode is currently unavailable due to network connectivity. Please try typing your question instead."
+            )
+            
+            # If we have transcribed text, process it in regular mode
+            if ctx.request and ctx.request.text:
+                logger.info(f"[{self.name}] Processing transcribed text: {ctx.request.text[:50]}...")
+                try:
+                    async for event in self.search_assistant.run(ctx):
+                        logger.info(f"[{self.name}] Regular mode event from SearchAssistant")
+                        yield event
+                except Exception as fallback_error:
+                    logger.error(f"[{self.name}] Fallback mode also failed: {fallback_error}")
+                    yield ConversationEvent.create(
+                        type="text", 
+                        text="I'm experiencing technical difficulties. Please try again later."
+                    )
+            else:
+                logger.warning(f"[{self.name}] No text input available for fallback processing")
 

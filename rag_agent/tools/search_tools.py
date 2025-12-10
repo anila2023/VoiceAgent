@@ -166,13 +166,10 @@ def search_documents(query: str, tool_context: ToolContext) -> Dict[str, Any]:
     if len(answer) > max_length:
         answer = answer[:max_length] + "..."
     
-    sources = sorted(list(set(chunk["source"] for chunk in relevant_chunks)))
-
     return {
         "status": "success",
         "answer": answer,
-        "sources": sources,
-        "message": f"Found information in {len(sources)} policy document(s)."
+        "message": answer  # Return clean answer without source references
     }
 
 

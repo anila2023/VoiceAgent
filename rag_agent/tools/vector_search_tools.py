@@ -20,11 +20,33 @@ import hashlib
 from pathlib import Path
 from typing import Dict, Any, List, Optional
 
-import chromadb
-from chromadb.config import Settings
-import PyPDF2
-from langchain.text_splitter import RecursiveCharacterTextSplitter
-from sentence_transformers import SentenceTransformer
+try:
+    import chromadb
+    from chromadb.config import Settings
+    CHROMADB_AVAILABLE = True
+except ImportError:
+    print("ChromaDB not available. Install with: pip install chromadb")
+    chromadb = None
+    Settings = None
+    CHROMADB_AVAILABLE = False
+
+try:
+    import PyPDF2
+except ImportError:
+    print("PyPDF2 not available. Install with: pip install PyPDF2")
+    PyPDF2 = None
+
+try:
+    from langchain_text_splitters import RecursiveCharacterTextSplitter
+except ImportError:
+    print("LangChain text splitters not available. Install with: pip install langchain-text-splitters")
+    RecursiveCharacterTextSplitter = None
+
+try:
+    from sentence_transformers import SentenceTransformer
+except ImportError:
+    print("Sentence transformers not available. Install with: pip install sentence-transformers")
+    SentenceTransformer = None
 from google.adk.tools import FunctionTool, ToolContext 
 
 
@@ -32,18 +54,29 @@ class VectorPolicyManager:
     """Manages vector database for insurance policy documents."""
     
     def __init__(self):
+        if not CHROMADB_AVAILABLE:
+            raise ImportError("ChromaDB is required but not installed. Run: pip install chromadb")
+        
         self.root_dir = Path(__file__).parent.parent.parent
         self.raw_policies_dir = self.root_dir / "data" / "raw_policies"
         self.db_path = self.root_dir / "data" / "vector_db"
         
-        # Initialize ChromaDB
-        self.client = chromadb.PersistentClient(
-            path=str(self.db_path),
-            settings=Settings(
-                anonymized_telemetry=False,
-                is_persistent=True
+        # Ensure vector_db directory exists
+        self.db_path.mkdir(parents=True, exist_ok=True)
+        
+        # Initialize ChromaDB with better error handling
+        try:
+            self.client = chromadb.PersistentClient(
+                path=str(self.db_path),
+                settings=Settings(
+                    anonymized_telemetry=False,
+                    allow_reset=True
+                )
             )
-        )
+        except Exception as e:
+            print(f"Failed to initialize ChromaDB: {e}")
+            # Fallback to in-memory client
+            self.client = chromadb.Client()
         
         # Get or create collection
         self.collection = self.client.get_or_create_collection(
@@ -52,11 +85,15 @@ class VectorPolicyManager:
         )
         
         # Initialize text splitter
-        self.text_splitter = RecursiveCharacterTextSplitter(
-            chunk_size=500,  # Smaller chunks for better precision
-            chunk_overlap=100,
-            separators=["\n\n", "\n", ". ", " ", ""]
-        )
+        if RecursiveCharacterTextSplitter:
+            self.text_splitter = RecursiveCharacterTextSplitter(
+                chunk_size=500,  # Smaller chunks for better precision
+                chunk_overlap=100,
+                separators=["\n\n", "\n", ". ", " ", ""]
+            )
+        else:
+            # Fallback simple splitter
+            self.text_splitter = None
         
         print(f"Vector DB initialized at: {self.db_path}")
     
